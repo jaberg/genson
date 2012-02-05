@@ -120,7 +120,7 @@ def node_eval(obj, memo):
             memo[id(obj)] = type(obj)([memo[id(v)] for v in obj])
 
     # -- types that pass-through
-    elif isinstance(obj, (int, float, str, np.ndarray)):
+    elif isinstance(obj, (int, float, basestring, np.ndarray)):
         waiting_on = []
         memo[id(obj)] = obj
 
@@ -131,7 +131,7 @@ def node_eval(obj, memo):
 
     # -- anything else
     else:
-        raise NotImplementedError(obj)
+        raise NotImplementedError((obj, type(obj)))
 
     if waiting_on:
         return [obj] + waiting_on
