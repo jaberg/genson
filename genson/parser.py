@@ -50,6 +50,8 @@ value
     value_tuple
     null
 """
+import sys
+sys.setrecursionlimit(2000)
 
 from pyparsing import *
 from functions import *
