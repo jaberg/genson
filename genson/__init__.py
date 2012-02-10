@@ -11,7 +11,10 @@ from references import ref
 from functions import *
 from util import *
 import copy
-from collections import OrderedDict
+try:
+    from collections import OrderedDict
+except ImportError:
+    import ordereddict as OrderedDict # -- could be from backport 
 
 
 class JSONGenerator:
