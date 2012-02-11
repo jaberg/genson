@@ -446,6 +446,6 @@ def test_replace_implicit_stochastic_nodes_multi():
     new_a, lrng = replace_implicit_stochastic_nodes(a, rng)
     print new_a
     val_a = rec_eval(new_a)
-    print val_a
+    assert np.allclose(val_a, (0.03096734347001351, 2.254282073234248))
 
 
