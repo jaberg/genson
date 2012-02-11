@@ -10,7 +10,7 @@ class SymbolTable(object):
     def __init__(self):
         # -- list and dict are special because they are Python builtins
         self._impls = {
-                'list': list,
+                'pos_args': lambda *x: x,
                 'dict': dict,
                 'literal': lambda x: x}
 
@@ -24,7 +24,7 @@ class SymbolTable(object):
                 o_len=o_len)
 
     def list(self, init):
-        return self._new_apply('list', init, {}, o_len=len(init))
+        return self._new_apply('pos_args', init, {}, o_len=len(init))
 
     def dict(self, *args, **kwargs):
         # XXX: figure out len
@@ -57,7 +57,7 @@ def as_apply(obj):
     if isinstance(obj, Apply):
         rval = obj
     elif isinstance(obj, (tuple, list)):
-        rval = Apply('list', [as_apply(a) for a in obj], {}, len(obj))
+        rval = Apply('pos_args', [as_apply(a) for a in obj], {}, len(obj))
     elif isinstance(obj, dict):
         items = obj.items()
         # -- should be fine to allow numbers and simple things
@@ -168,6 +168,10 @@ def dfs(aa, seq=None, seqset=None):
     return seq
 
 
+################################################################################
+################################################################################
+
+
 implicit_stochastic_symbols = set()
 
 
@@ -178,7 +182,7 @@ def implicit_stochastic(f):
 
 @global_scope.define_info(o_len=2)
 def draw_rng(rng, f_name, *args, **kwargs):
-    draw = global_scope.impls[f_name](*args, rng=rng, **kwargs)
+    draw = global_scope._impls[f_name](*args, rng=rng, **kwargs)
     return draw, rng
 
 
@@ -192,18 +196,54 @@ def replace_implicit_stochastic_nodes(expr, rng, scope=global_scope):
     nodes = dfs(expr)
     for ii, orig in enumerate(nodes):
         if orig.name in implicit_stochastic_symbols:
-            draw, new_lrng = scope.draw_rng(
-                    lrng,
-                    orig.name,
-                    orig.pos_args,
-                    orig.named_args)
+            obj = scope.draw_rng(lrng, orig.name)
+            obj.pos_args += orig.pos_args
+            obj.named_args += orig.named_args
+            draw, new_lrng = obj
             # -- loop over all nodes that *use* this one, and change them
             for client in nodes[ii+1:]:
-                client.replace(orig, draw, semantics=dict(reason='adding rng'))
+                client.replace_input(orig, draw)
             if expr is orig:
                 expr = draw
             lrng = new_lrng
     return expr, new_lrng
+
+
+################################################################################
+################################################################################
+
+
+def rec_eval(node, scope=global_scope):
+    """
+    Returns nodes required by this one.
+    Updates the memo by side effect. Returning [] means this node has been
+    computed and the value is available as memo[id(node)]
+    """
+    memo = {}
+    for aa in dfs(node):
+        if isinstance(aa, Literal):
+            memo[id(aa)] = aa._obj
+    todo = [node]
+    topnode = node
+    while todo:
+        if len(todo) > 100000:
+            raise RuntimeError('Probably infinite loop in document')
+        node = todo.pop()
+        if id(node) not in memo:
+            waiting_on = [v for v in node.inputs() if id(v) not in memo]
+            if waiting_on:
+                todo.extend([node] + waiting_on)
+            else:
+                args = [memo[id(v)] for v in node.pos_args]
+                kwargs = dict([(k, memo[id(v)]) for (k, v) in node.named_args])
+                memo[id(node)] = rval = scope._impls[node.name](*args, **kwargs)
+                if rval is None:
+                    raise Exception('really?', (node.name, args, kwargs))
+    return memo[id(topnode)]
+
+
+################################################################################
+################################################################################
 
 
 @global_scope.define
@@ -224,7 +264,7 @@ def add(a, b):
 @implicit_stochastic
 @global_scope.define
 def uniform(low, high, rng=None):
-    rng.uniform(low, high)
+    return rng.uniform(low, high)
 
 
 @implicit_stochastic
@@ -288,7 +328,7 @@ def test_as_apply_list_of_literals():
     l = [9, 3]
     al = as_apply(l)
     assert isinstance(al, Apply)
-    assert al.name == 'list'
+    assert al.name == 'pos_args'
     assert len(al) == 2
     assert isinstance(al.pos_args[0], Literal)
     assert isinstance(al.pos_args[1], Literal)
@@ -301,7 +341,7 @@ def test_as_apply_list_of_applies():
 
     al = as_apply(alist)
     assert isinstance(al, Apply)
-    assert al.name == 'list'
+    assert al.name == 'pos_args'
     # -- have to come back to this if Literal copies args
     assert al.pos_args == alist
 
@@ -395,5 +435,17 @@ def test_replace_implicit_stochastic_nodes():
     rng = np.random.RandomState(234)
     new_a, lrng = replace_implicit_stochastic_nodes(a, rng)
     print new_a
+    assert new_a.name == 'getitem'
+    assert new_a.pos_args[0].name == 'draw_rng'
+
+
+def test_replace_implicit_stochastic_nodes_multi():
+    uniform = global_scope.uniform
+    a = as_apply([uniform(0, 1), uniform(2, 3)])
+    rng = np.random.RandomState(234)
+    new_a, lrng = replace_implicit_stochastic_nodes(a, rng)
+    print new_a
+    val_a = rec_eval(new_a)
+    print val_a
 
 
